@@ -5,7 +5,8 @@ import uuid
 import cv2
 import numpy as np
 
-from game_state_parser import GameStateParserManager
+from paddleocr_parser import PaddleOCRManager
+from reward_system import RewardSystem
 
 
 class AIServer:
@@ -45,8 +46,11 @@ class AIServer:
         self.agent = None
         self.start_check = None
         
-        # 游戏状态解析器
-        self.state_parser = GameStateParserManager.get_instance()
+        # 游戏状态解析器（使用PaddleOCR）
+        self.state_parser = PaddleOCRManager.get_instance(use_gpu=False)
+        
+        # 奖励系统
+        self.reward_system = RewardSystem()
         
         # 本地轨迹缓冲区
         self.rollout_buffer = []
@@ -156,12 +160,21 @@ class AIServer:
             # 检查游戏是否结束
             if done == 1:
                 self.episodes_completed += 1
+                
+                # 打印回合统计
+                episode_summary = self.reward_system.get_episode_summary()
+                print(f"[AI Server {self.server_id}] Episode {self.episodes_completed} Summary: {episode_summary}")
+                
                 # 处理最后一个样本
                 if self.rollout_buffer:
                     self.rollout_buffer[-1]['next_value'] = 0.0
                 
                 # 发送数据
                 self._send_data()
+                
+                # 重置奖励系统
+                self.reward_system.reset()
+                
                 break
             
             state = next_state
@@ -207,8 +220,38 @@ class AIServer:
         }
     
     def _calculate_additional_reward(self, info):
-        """计算额外奖励"""
-        return 0.0  # 可扩展为更复杂的奖励计算
+        """计算额外奖励（使用RewardSystem）"""
+        try:
+            # 构建游戏状态字典
+            game_state = {}
+            
+            # 从解析的状态中提取信息
+            if hasattr(self, 'last_state_image') and self.last_state_image is not None:
+                parsed_state = self.state_parser.parse(self.last_state_image)
+                
+                game_state['hp_percent'] = parsed_state.get('hp_percent', 1.0)
+                game_state['mp_percent'] = parsed_state.get('mp_percent', 1.0)
+                game_state['gold'] = parsed_state.get('gold', 0)
+                game_state['level'] = parsed_state.get('level', 1)
+            
+            # 从环境info中提取信息
+            if info:
+                game_state['kills'] = info.get('kills', 0)
+                game_state['assists'] = info.get('assists', 0)
+                game_state['deaths'] = info.get('deaths', 0)
+                game_state['last_hits'] = info.get('last_hits', 0)
+                game_state['towers_destroyed'] = info.get('towers_destroyed', 0)
+                game_state['damage_dealt'] = info.get('damage_dealt', 0)
+                game_state['damage_taken'] = info.get('damage_taken', 0)
+            
+            # 使用奖励系统计算奖励
+            additional_reward = self.reward_system.calculate_reward(game_state)
+            
+            return additional_reward
+            
+        except Exception as e:
+            print(f"[AI Server {self.server_id}] Reward calculation error: {e}")
+            return 0.0
     
     def _send_data(self):
         """发送完整轨迹数据"""

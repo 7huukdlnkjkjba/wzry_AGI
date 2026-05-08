@@ -41,6 +41,11 @@ def parse_args():
     parser.add_argument('--feather_threads', type=int, default=1, help='Number of threads for FeatherCNN')
     parser.add_argument('--onnx_model_path', type=str, default='models/ppo_policy.onnx', help='ONNX model path')
     
+    # PaddleOCR相关参数
+    parser.add_argument('--use_paddleocr', action='store_true', help='Use PaddleOCR for game state parsing')
+    parser.add_argument('--paddleocr_gpu', action='store_true', help='Use GPU for PaddleOCR')
+    parser.add_argument('--paddleocr_model_dir', type=str, default='models/ocr', help='PaddleOCR model directory')
+    
     return parser.parse_args()
 
 
@@ -81,6 +86,16 @@ def main():
     dispatch = DispatchModule.get_instance()
     dispatch.set_learner(learner)
     
+    # 初始化PaddleOCR（如果启用）
+    if dist_args.use_paddleocr:
+        from paddleocr_parser import PaddleOCRManager
+        print("[Main] Initializing PaddleOCR for game state parsing...")
+        ocr_manager = PaddleOCRManager.get_instance(
+            use_gpu=dist_args.paddleocr_gpu,
+            model_dir=dist_args.paddleocr_model_dir
+        )
+        print("[Main] PaddleOCR initialized")
+    
     # 初始化游戏工具
     rewordUtil = GetRewordUtil()
     start_check = OnnxRunner('models/start.onnx', classes=['started'])
@@ -99,6 +114,14 @@ def main():
         
         # 初始化服务器
         server.initialize(tool, env, rewordUtil, shared_agent, start_check)
+        
+        # 如果使用PaddleOCR，更新服务器的状态解析器
+        if dist_args.use_paddleocr:
+            from paddleocr_parser import PaddleOCRManager
+            server.state_parser = PaddleOCRManager.get_instance(
+                use_gpu=dist_args.paddleocr_gpu,
+                model_dir=dist_args.paddleocr_model_dir
+            )
         
         # 注册到Dispatch Module
         dispatch.register_server(server)

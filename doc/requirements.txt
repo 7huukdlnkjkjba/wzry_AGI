@@ -5,3 +5,10 @@ keyboard==0.13.5
 ppocr-onnx==0.0.3.9
 matplotlib==3.9.2
 filelock==3.13.1
+
+# PaddleOCR（用于游戏状态解析）
+paddleocr>=2.7.0
+paddlepaddle>=2.5.0
+
+# FeatherCNN（可选，用于推理加速）
+# 需要手动编译：https://github.com/Tencent/FeatherCNN
