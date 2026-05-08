@@ -80,9 +80,10 @@ class RLLearner:
         values = [t.value for t in transitions]
         next_values = [t.next_value for t in transitions]
         dones = [t.done for t in transitions]
+        state_infos = [t.state_info if hasattr(t, 'state_info') else None for t in transitions]
         
         # 执行PPO训练
-        self.agent.train(states, actions, log_probs, rewards, values, next_values, dones)
+        self.agent.train(states, actions, log_probs, rewards, values, next_values, dones, state_infos)
         
         # 更新策略版本
         with self.policy_lock:
@@ -111,6 +112,7 @@ class RLLearner:
         :param sample_data: 采样数据
         """
         from globalInfo import globalInfo
+        state_info = sample_data.get('state_info')
         globalInfo.store_transition_ppo(
             sample_data['state'],
             sample_data['action'],
@@ -118,7 +120,8 @@ class RLLearner:
             sample_data['reward'],
             sample_data['value'],
             sample_data['next_value'],
-            sample_data['done']
+            sample_data['done'],
+            state_info
         )
     
     def get_policy(self):

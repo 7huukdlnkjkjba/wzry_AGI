@@ -53,13 +53,24 @@ class PPOAgent:
     def export_to_onnx(self, output_path):
         """导出模型为ONNX格式，用于FeatherCNN推理"""
         dummy_input = torch.randn(1, 3, 640, 640).to(self.device)
+        # 创建一个模拟的状态字典
+        dummy_state_info = {
+            'hp_percent': 1.0,
+            'mp_percent': 1.0,
+            'skill_cd': {1: 0, 2: 0, 3: 0},
+            'summoner_cd': {'skill_1': 0, 'skill_2': 0},
+            'item_cd': 0,
+            'level': 1,
+            'gold': 0,
+            'minimap': {'allies': [], 'enemies': []}
+        }
         torch.onnx.export(
             self.policy_net,
-            (dummy_input, None),
+            (dummy_input, None, dummy_state_info),
             output_path,
             opset_version=11,
             do_constant_folding=True,
-            input_names=['input', 'hidden'],
+            input_names=['input', 'hidden', 'state_info'],
             output_names=['output_0', 'output_1', 'output_2', 'output_3', 
                          'output_4', 'output_5', 'output_6', 'output_7', 'value'],
             dynamic_axes={
@@ -103,12 +114,13 @@ class PPOAgent:
         return self._select_action_pytorch(state, hidden_state, game_state)
     
     def _select_action_pytorch(self, state, hidden_state=None, game_state=None):
-        """使用PyTorch进行动作选择"""
+        """使用PyTorch进行动作选择，支持游戏状态"""
         tmp_state = self.preprocess_image(state).unsqueeze(0)
         self.policy_net.eval()
         
         with torch.no_grad():
-            logits_list, value, new_hidden = self.policy_net(tmp_state, hidden_state)
+            # 传递游戏状态给网络
+            logits_list, value, new_hidden = self.policy_net(tmp_state, hidden_state, game_state)
             
             # 应用action mask
             logits_list = self.action_mask.apply_mask_to_logits(logits_list)
@@ -132,30 +144,9 @@ class PPOAgent:
         # 预处理图像
         input_data = self.preprocess_image_feather(state)
         
-        # 使用FeatherCNN推理
-        outputs = self.feather_manager.infer('ppo_policy', input_data)
-        
-        # 解析输出
-        logits_list = [torch.from_numpy(output) for output in outputs[:-1]]
-        value = outputs[-1][0]
-        
-        # 应用action mask
-        logits_list = self.action_mask.apply_mask_to_logits(logits_list)
-        
-        # 采样动作
-        actions = []
-        log_probs = []
-        
-        for logits in logits_list:
-            dist = Categorical(logits=logits)
-            action = dist.sample()
-            log_prob = dist.log_prob(action)
-            actions.append(action.item())
-            log_probs.append(log_prob)
-        
-        total_log_prob = torch.sum(torch.stack(log_probs)).item()
-        
-        return actions, total_log_prob, value, None
+        # 使用FeatherCNN推理（FeatherCNN暂不支持状态向量，使用PyTorch fallback）
+        print("Warning: FeatherCNN doesn't support state vector yet, falling back to PyTorch")
+        return self._select_action_pytorch(state, None, game_state)
     
     def preprocess_image_feather(self, image, target_size=(640, 640)):
         """预处理图像用于FeatherCNN"""
@@ -226,8 +217,20 @@ class PPOAgent:
         
         return total_loss, policy_loss, value_loss
     
-    def train(self, states, actions, log_probs, rewards, values, next_values, dones):
-        """PPO训练"""
+    def train(self, states, actions, log_probs, rewards, values, next_values, dones, state_infos=None):
+        """
+        PPO训练，支持游戏状态
+        
+        Args:
+            states: 图像状态列表
+            actions: 动作列表
+            log_probs: 旧策略的对数概率
+            rewards: 奖励列表
+            values: 价值列表
+            next_values: 下一个状态价值列表
+            dones: 完成标志列表
+            state_infos: 游戏状态信息列表
+        """
         # 计算优势函数
         advantages, returns = self.compute_advantages(rewards, values, next_values, dones)
         
@@ -236,28 +239,49 @@ class PPOAgent:
         old_log_probs = torch.tensor(log_probs, device=self.device)
         states = torch.stack([self.preprocess_image(s) for s in states]).to(device)
         
+        # 如果状态信息为None，创建默认值
+        if state_infos is None:
+            state_infos = [None] * len(states)
+        
         # 多次迭代优化
         for epoch in range(self.ppo_epochs):
             self.policy_net.train()
             
-            # 前向传播
-            logits_list, values, _ = self.policy_net(states)
+            total_loss_sum = 0.0
+            policy_loss_sum = 0.0
+            value_loss_sum = 0.0
             
-            # 计算当前策略的对数概率
-            current_log_probs = self.policy_net.get_log_probs(logits_list, actions)
+            # 逐个处理每个样本（因为每个样本有不同的状态信息）
+            for i in range(len(states)):
+                # 前向传播，传递状态信息
+                logits_list, value, _ = self.policy_net(states[i:i+1], None, state_infos[i])
+                
+                # 计算当前策略的对数概率
+                current_log_prob = self.policy_net.get_log_probs(logits_list, actions[i:i+1])
+                
+                # 计算dual-PPO损失
+                total_loss, policy_loss, value_loss = self.dual_ppo_loss(
+                    current_log_prob, old_log_probs[i:i+1], advantages[i:i+1], 
+                    value.squeeze(), returns[i:i+1]
+                )
+                
+                # 累加损失
+                total_loss_sum += total_loss
+                policy_loss_sum += policy_loss
+                value_loss_sum += value_loss
             
-            # 计算dual-PPO损失
-            total_loss, policy_loss, value_loss = self.dual_ppo_loss(
-                current_log_probs, old_log_probs, advantages, values.squeeze(), returns
-            )
+            # 平均损失
+            total_loss_avg = total_loss_sum / len(states)
+            policy_loss_avg = policy_loss_sum / len(states)
+            value_loss_avg = value_loss_sum / len(states)
             
             # 优化
             self.optimizer.zero_grad()
-            total_loss.backward()
+            total_loss_avg.backward()
             self.optimizer.step()
             
-            print(f"Epoch {epoch+1}/{self.ppo_epochs}, Loss: {total_loss.item():.4f}, "
-                  f"Policy Loss: {policy_loss.item():.4f}, Value Loss: {value_loss.item():.4f}")
+            print(f"Epoch {epoch+1}/{self.ppo_epochs}, Loss: {total_loss_avg.item():.4f}, "
+                  f"Policy Loss: {policy_loss_avg.item():.4f}, Value Loss: {value_loss_avg.item():.4f}")
         
         # 更新旧策略
         self.update_old_policy()

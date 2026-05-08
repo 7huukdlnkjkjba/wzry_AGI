@@ -50,11 +50,11 @@ class GlobalInfo:
         self.set_value('start_game', False)
 
     # -------------------------------ppo经验池-------------------------------------
-    def store_transition_ppo(self, state, action, log_prob, reward, value, next_value, done):
+    def store_transition_ppo(self, state, action, log_prob, reward, value, next_value, done, state_info=None):
         """存储PPO轨迹样本"""
         self.lock.acquire()
         try:
-            self.ppo_memory.push(state, action, log_prob, reward, value, next_value, done)
+            self.ppo_memory.push(state, action, log_prob, reward, value, next_value, done, state_info)
         finally:
             self.lock.release()
 

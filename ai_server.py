@@ -141,7 +141,7 @@ class AIServer:
             extra_reward = self._calculate_additional_reward(info)
             total_reward = reward + extra_reward
             
-            # 存储轨迹数据
+            # 存储轨迹数据（包含游戏状态）
             self.rollout_buffer.append({
                 'state': state.copy(),
                 'action': action,
@@ -150,6 +150,7 @@ class AIServer:
                 'value': value,
                 'next_value': prev_value,
                 'done': done,
+                'state_info': game_state,
                 'server_id': self.server_id,
                 'timestamp': time.time()
             })

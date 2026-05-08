@@ -8,14 +8,13 @@ import random
 # 其中的 状态(state)是指从屏幕上获得的差分图像块(screen diifference image)。
 #
 # ReplayMemory - 一个大小有限的循环缓冲区，用于保存最近观察到的迁移(transition)。
-# 该类还实现了一个采样方法 .sample() 用来在训练过程中随机的选择一个迁移批次(batch of transitions)。
 
 Transition = namedtuple('Transition',
                         ('state', 'action', 'reward', 'next_state', 'done'))
 
-# PPOMemory - PPO专用的记忆单元，支持存储对数概率和价值
+# PPOMemory - PPO专用的记忆单元，支持存储对数概率、价值和状态信息
 PPOMemory = namedtuple('PPOMemory',
-                       ('state', 'action', 'log_prob', 'reward', 'value', 'next_value', 'done'))
+                       ('state', 'action', 'log_prob', 'reward', 'value', 'next_value', 'done', 'state_info'))
 
 
 class ReplayMemory(object):
@@ -49,6 +48,7 @@ class PPORolloutBuffer(object):
     - 基于生成时间的数据样本管理
     - 支持多服务器数据合并
     - 线程安全操作
+    - 支持游戏状态信息存储
     """
 
     def __init__(self, capacity):
@@ -66,10 +66,10 @@ class PPORolloutBuffer(object):
         # 锁
         self.lock = threading.Lock()
 
-    def push(self, state, action, log_prob, reward, value, next_value, done, timestamp=None, server_id=""):
-        """保存一个轨迹样本"""
+    def push(self, state, action, log_prob, reward, value, next_value, done, state_info=None, timestamp=None, server_id=""):
+        """保存一个轨迹样本，支持状态信息"""
         with self.lock:
-            self.buffer[self.position] = PPOMemory(state, action, log_prob, reward, value, next_value, done)
+            self.buffer[self.position] = PPOMemory(state, action, log_prob, reward, value, next_value, done, state_info)
             self.timestamps[self.position] = timestamp or time.time()
             self.server_ids[self.position] = server_id
             

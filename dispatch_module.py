@@ -135,6 +135,7 @@ class DispatchModule:
         from globalInfo import globalInfo
         
         for item in data:
+            state_info = item.get('state_info')
             globalInfo.store_transition_ppo(
                 item['state'],
                 item['action'],
@@ -142,7 +143,8 @@ class DispatchModule:
                 item['reward'],
                 item['value'],
                 item['next_value'],
-                item['done']
+                item['done'],
+                state_info
             )
     
     def _policy_distribution_loop(self):
